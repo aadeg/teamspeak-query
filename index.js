@@ -19,7 +19,7 @@ class TeamspeakQuery extends EventEmitter {
    * @param      {Number}  [port=10011]      The port of your teamspeak server
    * @param      {Object}  [options=Object]  Options for the socket
    */
-  constructor(host, port, options, reconDelay) {
+  constructor(host, port, options, reconDelay, keepAlive) {
     super();
 
     let sock = this.sock = new net.Socket(options || { });
@@ -28,7 +28,9 @@ class TeamspeakQuery extends EventEmitter {
     this._current = null;
     this._statusLines = 0;
     this._reconDelay = reconDelay;
+    this._keepAlive = keepAlive;
     this.firstConnection = true;
+    this._lastCommandDate = null;
 
     host = this.host = host || '127.0.0.1'
     port = this.port = port || 10011;
@@ -37,31 +39,38 @@ class TeamspeakQuery extends EventEmitter {
 
     sock.connect(port, host);
 
-    sock.on('connect', () => {
-      if (this.firstConnection){
-        this.carrier = carrier.carry(sock);
-        this.carrier.on('line', this.handleLine.bind(this));
-        this.firstConnection = false;
-      } else {
-        this._statusLines = 0;
-      }
-      
-      this.emit('connected');
-    });
-
-    if (reconDelay){
-      sock.on('close', () => {
-        if (this.firstConnection)
-          return;
-
-        this.emit('reconnecting');
-        setTimeout(() => {
-          sock.connect(port, host);
-        }, reconDelay);
-      });
-    }
+    sock.on('connect', this._onSocketConnect.bind(this));
+    if (reconDelay)
+      sock.on('close', this._onSocketClose.bind(this));
+    if (keepAlive)
+      setInterval(() => { 
+        if (!this._lastCommandDate || 
+            (new Date() - this._lastCommandDate > 60000))
+          this.send('whoami');
+      }, 5000);
   }
 
+  _onSocketConnect(){
+    if (this.firstConnection){
+      this.carrier = carrier.carry(this.sock);
+      this.carrier.on('line', this.handleLine.bind(this));
+      this.firstConnection = false;
+    } else {
+      this._statusLines = 0;
+    }
+
+    this.emit('connected');
+  }
+
+  _onSocketClose(){
+    if (this.firstConnection)
+      return;
+
+    this.emit('reconnecting');
+    setTimeout(() => {
+      this.sock.connect(this.port, this.host);
+    }, this._reconDelay);
+  }
   /**
    * Send a command to the server
    *
@@ -88,6 +97,7 @@ class TeamspeakQuery extends EventEmitter {
       if(!this._current && this.queue.length) {
         this._current = this.queue.shift();
         this.sock.write(this._current.cmd + '\n');
+        this._lastCommandDate = new Date();
       }
     });
   }
