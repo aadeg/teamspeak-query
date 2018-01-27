@@ -19,7 +19,7 @@ class TeamspeakQuery extends EventEmitter {
    * @param      {Number}  [port=10011]      The port of your teamspeak server
    * @param      {Object}  [options=Object]  Options for the socket
    */
-  constructor(host, port, options) {
+  constructor(host, port, options, reconDelay) {
     super();
 
     let sock = this.sock = new net.Socket(options || { });
@@ -27,6 +27,8 @@ class TeamspeakQuery extends EventEmitter {
     this.queue = [ ];
     this._current = null;
     this._statusLines = 0;
+    this._reconDelay = reconDelay;
+    this.firstConnection = true;
 
     host = this.host = host || '127.0.0.1'
     port = this.port = port || 10011;
@@ -36,9 +38,28 @@ class TeamspeakQuery extends EventEmitter {
     sock.connect(port, host);
 
     sock.on('connect', () => {
-      this.carrier = carrier.carry(sock);
-      this.carrier.on('line', this.handleLine.bind(this));
+      if (this.firstConnection){
+        this.carrier = carrier.carry(sock);
+        this.carrier.on('line', this.handleLine.bind(this));
+        this.firstConnection = false;
+      } else {
+        this._statusLines = 0;
+      }
+      
+      this.emit('connected');
     });
+
+    if (reconDelay){
+      sock.on('close', () => {
+        if (this.firstConnection)
+          return;
+
+        this.emit('reconnecting');
+        setTimeout(() => {
+          sock.connect(port, host);
+        }, reconDelay);
+      });
+    }
   }
 
   /**
